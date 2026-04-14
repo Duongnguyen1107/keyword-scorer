@@ -1,0 +1,5 @@
+sentence-transformers==3.4.1
+lightgbm==4.6.0
+scikit-learn==1.6.1
+pandas==2.2.3
+numpy==1.26.4
