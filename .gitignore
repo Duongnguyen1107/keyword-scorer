@@ -1,0 +1,5 @@
+model.pkl
+__pycache__/
+*.pyc
+.DS_Store
+output/
