@@ -235,7 +235,7 @@ def cmd_score(args):
           f'CV AUC={payload["auc_cv"]:.4f}')
 
     # ── Load input ────────────────────────────────────────────
-    input_path = args.score_input or args.input
+    input_path = getattr(args, 'score_input', None) or getattr(args, 'input', None)
     print(f'\n[→] Loading keywords: {input_path}')
     raw = pd.read_csv(input_path)
 
@@ -309,7 +309,7 @@ def cmd_score(args):
         print(f'  {row["convert_prob"]:>5.1f}%  {row["keyword"]}')
 
     # ── Save outputs ─────────────────────────────────────────
-    output_path = args.score_output if hasattr(args, 'score_output') and args.score_output else args.output
+    output_path = getattr(args, 'score_output', None) or getattr(args, 'output', None)
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
