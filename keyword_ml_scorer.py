@@ -140,7 +140,7 @@ def cmd_train(args):
         sys.exit(1)
 
     df = clean_df(df)
-    df['is_converter'] = (df['avg_ctr'] > 0).astype(int)
+    df['is_converter'] = (df['avg_ctr'] >= 3.0).astype(int)  # ✅ chỉ CTR thực sự tốt
 
     print(f'    {len(df):,} keywords | '
           f'{df["is_converter"].mean()*100:.1f}% converters | '
@@ -248,24 +248,30 @@ def cmd_score(args):
     if kw_col is None:
         kw_col = raw.columns[0]
 
-    df_score = pd.DataFrame({'keyword': raw[kw_col].astype(str).str.lower().str.strip()})
-    df_score = df_score.drop_duplicates('keyword')
-    df_score = df_score[df_score['keyword'].notna() & (df_score['keyword'] != '') & (df_score['keyword'] != 'nan')]
-    df_score = df_score.reset_index(drop=True)
+    # Build từ raw, giữ niche/intent trước khi dedup
+    raw['_kw'] = raw[kw_col].astype(str).str.lower().str.strip()
+    raw['_niche']  = raw['niche']  if 'niche'  in raw.columns else pd.Series(['Unknown'] * len(raw))
+    raw['_intent'] = raw['intent'] if 'intent' in raw.columns else pd.Series(['general'] * len(raw))
 
-    # If niche/intent columns exist use them; otherwise default
-    if 'niche' in raw.columns:
-        df_score['niche'] = raw.loc[df_score.index, 'niche'].values
-    else:
-        df_score['niche'] = 'Unknown'
+    # Dedup theo keyword, giữ dòng đầu tiên
+    raw_dedup = raw.drop_duplicates('_kw').copy()
+    raw_dedup = raw_dedup[raw_dedup['_kw'].notna() & (raw_dedup['_kw'] != '') & (raw_dedup['_kw'] != 'nan')]
+    raw_dedup = raw_dedup.reset_index(drop=True)
 
-    if 'intent' in raw.columns:
-        df_score['intent'] = raw.loc[df_score.index, 'intent'].values
-    else:
-        df_score['intent'] = 'general'
+    df_score = pd.DataFrame({
+        'keyword': raw_dedup['_kw'],
+        'niche':   raw_dedup['_niche'],
+        'intent':  raw_dedup['_intent'],
+    })
+
+    if 'niche' not in raw.columns:
+        print('[WARNING] Thiếu cột niche — score kém chính xác ~20-30%')
+    if 'intent' not in raw.columns:
+        print('[WARNING] Thiếu cột intent — score kém chính xác ~20-30%')
 
     print(f'    {len(df_score):,} unique keywords to score')
-
+    if 'niche' not in raw.columns or 'intent' not in raw.columns:
+        print('    [!] Tip: Chạy reclassify_keywords.py trước để có niche/intent chính xác hơn')
     # ── Features ─────────────────────────────────────────────
     embeddings = embed(df_score['keyword'].tolist(), st_model)
     meta       = make_meta_features(df_score, niche_map, intent_map)
@@ -314,13 +320,36 @@ def cmd_score(args):
     out.parent.mkdir(parents=True, exist_ok=True)
 
     # Full file
-    df_out = df_score[['keyword', 'niche', 'intent', 'convert_prob', 'tier']].sort_values('convert_prob', ascending=False)
+    # Giữ lại volume nếu có trong file input
+    extra_cols = []
+    for col in ['volume', 'search_volume', 'avg_monthly_searches', 'monthly_searches']:
+        if col in raw_dedup.columns:
+            df_score[col] = raw_dedup[col].values
+            extra_cols.append(col)
+            break  # chỉ lấy 1 cột volume
+
+    # Priority score = convert_prob × log10(volume+1) nếu có volume
+    if extra_cols:
+        vol_col = extra_cols[0]
+        df_score['priority_score'] = (
+            df_score['convert_prob'] * np.log10(df_score[vol_col].fillna(1) + 1)
+        ).round(1)
+        out_cols = ['keyword', 'niche', 'intent', vol_col, 'convert_prob', 'priority_score', 'tier']
+        sort_col = 'priority_score'
+        print(f'    [✓] Tìm thấy cột volume: {vol_col} → tính priority_score')
+    else:
+        out_cols = ['keyword', 'niche', 'intent', 'convert_prob', 'tier']
+        sort_col = 'convert_prob'
+        print('    [!] Không có cột volume — sort theo convert_prob')
+
+    df_out = df_score[out_cols].sort_values(sort_col, ascending=False)
     df_out.to_csv(out, index=False)
     print(f'\n[✓] Full output: {out}  ({len(df_out):,} keywords)')
 
     # Split by tier
     for tier_label in ['Tier1_High', 'Tier2_Medium', 'Tier3_Low']:
-        subset = df_out[df_out['tier'] == tier_label][['keyword', 'convert_prob', 'niche']]
+        tier_cols = ['keyword', 'convert_prob', 'niche'] + extra_cols + (['priority_score'] if extra_cols else [])
+        subset = df_out[df_out['tier'] == tier_label][[c for c in tier_cols if c in df_out.columns]]
         if len(subset) == 0:
             continue
         tier_path = out.parent / f'{out.stem}_{tier_label}.csv'
