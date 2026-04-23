@@ -238,13 +238,13 @@ def cmd_score(args):
     input_path = getattr(args, 'score_input', None) or getattr(args, 'input', None)
     print(f'\n[→] Loading keywords: {input_path}')
     for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
-    try:
-        raw = pd.read_csv(input_path, encoding=enc)
-        break
-    except UnicodeDecodeError:
-        continue
-else:
-    raise ValueError(f"Cannot decode {input_path} with any known encoding")
+        try:
+            raw = pd.read_csv(input_path, encoding=enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise ValueError(f"Cannot decode {input_path} with any known encoding")
   
     # Auto-detect keyword column
     kw_col = None
